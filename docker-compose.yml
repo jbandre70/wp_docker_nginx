@@ -1,0 +1,133 @@
+version: '3'
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: db
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - MYSQL_DATABASE=wordpress
+    volumes:
+      - dbdata:/var/lib/mysql
+    networks:
+      - app-network
+
+  phpmyadmin:
+    depends_on:
+      - db
+    container_name: wp-phpmyadmin
+    image: phpmyadmin/phpmyadmin
+    restart: unless-stopped
+    ports:
+      - '9008:80'
+    env_file: .env
+    environment:
+      PMA_HOST: db
+      MYSQL_ROOT_PASSWORD: '${MYSQL_ROOT_PASSWORD}'
+    networks:
+      - app-network
+
+  wordpress:
+    depends_on:
+      - db
+    image: wordpress:5.1.1-fpm-alpine
+    container_name: wordpress
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MYSQL_ROOT_PASSWORD: '${MYSQL_ROOT_PASSWORD}'
+      MYSQL_DATABASE: '${MYSQL_DATABASE}'
+      MYSQL_USER: '${MYSQL_USER}'
+      MYSQL_PASSWORD: '${MYSQL_PASSWORD}'
+    volumes:
+      - ./wordpress:/var/www/html
+    networks:
+      - app-network
+    links:
+      - php
+      - php-cli
+
+  php:
+    build:
+      context: ./docker/php/fpm
+      args:
+        PHP_VERSION: '${PHP_VERSION}'
+    working_dir: /usr/share/nginx/html
+    volumes:
+      - ./docker/php/fpm/php.ini:/usr/local/etc/php/conf.d/php.ini
+    links:
+      - db
+      - memcached
+
+  memcached:
+    image: memcached:latest
+
+  php-cli:
+    build:
+      context: ./docker/php/php-cli
+      args:
+        PHP_VERSION: '${PHP_VERSION}'
+    working_dir: /usr/share/nginx/html
+    volumes:
+      - ./docker/php/fpm/php.ini:/usr/local/etc/php/conf.d/php.ini
+
+  node:
+    depends_on:
+      - wordpress
+    container_name: nodejs
+    restart: 'no'
+    image: node:latest
+    volumes:
+      - node-data:/usr/src/app
+    ports:
+      - '3000:3000'
+      - '3001:3001'
+
+  wpcli:
+    depends_on:
+      - db
+      - wordpress
+    image: wordpress:cli
+    container_name: site-cli
+    user: 1000:1000
+    command: tail -f /dev/null
+    volumes:
+      - type: bind
+        source: ./wordpress
+        target: /var/www/html
+      - './docker/php/php-cli/php.ini:/usr/local/etc/php/conf.d/local.ini'
+    networks:
+      - app-network
+    environment:
+      WORDPRESS_DB_HOST: database:3306
+      WORDPRESS_DB_USER: '${MYSQL_USER}'
+      WORDPRESS_DB_PASSWORD: '${MYSQL_PASSWORD}'
+      WORDPRESS_DB_NAME: '${MYSQL_DATABASE}'
+      WORDPRESS_DEBUG: 1
+      WORDPRESS_TABLE_PREFIX: jba_
+      WORDPRESS_CONFIG_EXTRA: |
+        define('FS_METHOD', 'direct');
+
+  webserver:
+    depends_on:
+      - wordpress
+    image: nginx:1.15.12-alpine
+    container_name: webserver
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+    volumes:
+      - ./wordpress:/var/www/html
+      - ./docker/nginx-conf:/etc/nginx/conf.d
+    networks:
+      - app-network
+
+volumes:
+  wordpress:
+  dbdata:
+  node-data:
+
+networks:
+  app-network:
+    driver: bridge
